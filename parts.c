@@ -30,18 +30,18 @@ int getImageInfo(char * mmap, int offset, int length)
         char *tmp = (char *)malloc(sizeof(char) * length);
         memcpy(tmp, mmap+offset, length);  
         for(i=0; i < length; i++){
-                retVal += ((int)tmp[i]<<(8*(length - i - 1)));
+                retVal += (((int)tmp[i]&0xFF)<<(8*(length - i - 1)));
         }
         free(tmp);
         return retVal;
 };
 
 void setSuperBlockInfo(char *p){
-	blockInfo.BlockSize = getImageInfo(p, 8, 2);
+	blockInfo.BlockSize  = getImageInfo(p, 8 , 2);
 	blockInfo.BlockCount = getImageInfo(p, 10, 4);
-	blockInfo.FATStart = getImageInfo(p, 14, 4);
-	blockInfo.FATBlocks = getImageInfo(p, 18, 4);
-	blockInfo.ROOTStart = getImageInfo(p, 22, 4);
+	blockInfo.FATStart   = getImageInfo(p, 14, 4);
+	blockInfo.FATBlocks  = getImageInfo(p, 18, 4);
+	blockInfo.ROOTStart  = getImageInfo(p, 22, 4);
 	blockInfo.ROOTBlocks = getImageInfo(p, 26, 4);
 }
 
@@ -104,16 +104,16 @@ int findDirectory(char* mmap, char* fileLocation, int BlockStart, int NumBlocks)
 	if(fileNameLength == 0){
 		for(i=0;i<NumBlocks;i++){
 			for(j=0;j<DirectoriesPerBlock;j++){
-				directory_entry = memcpy(directory_entry, mmap+offset+i*blockInfo.BlockSize+64*j, 64);  
+				directory_entry = memcpy(directory_entry, mmap+offset+i*blockInfo.BlockSize+64*j, 64);
 				if((directory_entry[0] & 0x03) == 0x03 || (directory_entry[0] & 0x05) == 0x07){
 					char ForD;
-					int file_size = getImageInfo(mmap,offset+i*blockInfo.BlockSize+64*j +9, 4);
-					uint16_t year = getImageInfo(directory_entry, 20, 2);
-					uint8_t month = getImageInfo(directory_entry, 22, 1);
-					uint8_t day = getImageInfo(mmap, offset+i*blockInfo.BlockSize+64*j +23, 1);
-					uint8_t hour = getImageInfo(mmap, offset+i*blockInfo.BlockSize+64*j +24, 1);
-					uint8_t minute = getImageInfo(mmap, offset+i*blockInfo.BlockSize+64*j +25, 1);
-					uint8_t second = getImageInfo(mmap, offset+i*blockInfo.BlockSize+64*j +26, 1);
+					int file_size  = getImageInfo(directory_entry, 9 , 4);
+					uint16_t year  = getImageInfo(directory_entry, 20, 2);
+					uint8_t month  = getImageInfo(directory_entry, 22, 1);
+					uint8_t day    = getImageInfo(directory_entry, 23, 1);
+					uint8_t hour   = getImageInfo(directory_entry, 24, 1);
+					uint8_t minute = getImageInfo(directory_entry, 25, 1);
+					uint8_t second = getImageInfo(directory_entry, 26, 1);
 
 					if((directory_entry[0] & 0x03) == 0x03){
 						ForD = 'F';
