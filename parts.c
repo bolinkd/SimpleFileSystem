@@ -47,6 +47,7 @@ struct FileInfo{
 	uint8_t second;
 	int numBlocks;
 	int startBlock;
+	int* Blocks;
 };
 
 struct ImageInfo imageInfo;
@@ -232,23 +233,32 @@ void copyFile(char* mmap, struct FileInfo fileInfo, char* localFileName){
 	fclose(file);
 }
 
-int findFirstEmptyBlock(char *mmap){
+int* findEmptyBlocks(char *mmap, int numReturn){
+	int* rtnArray = malloc(sizeof(int)*numReturn);
 	int i;
 	int j=0;
+	int k=0;
     int FATStartByte = (imageInfo.BlockSize*imageInfo.FATStart);
     int FATSize = imageInfo.BlockSize*imageInfo.FATBlocks;
     for(i=FATStartByte; i<FATStartByte+FATSize ;i=i+4){
+    	if(k == numReturn){
+		    //for(i=0;i<numReturn;i++){
+		    //	printf("%d ",rtnArray[i]);
+		    //}
+		    //printf("\n");
+		    return rtnArray;   		
+    	}
     	int FATEntry = getImageInfo(mmap,i,4);
     	if(FATEntry == 0){
-    		return j;
-    	}else{
-    		j++;
+    		rtnArray[k] = j;
+    		k++;
     	}
+    	j++;
     }
-    return -1;
+    return NULL;
 }
 
-void part4(char* mmap, char *fileName, char *fileLocation){
+int part4(char* mmap, char *fileName, char *fileLocation){
 	int fd;
 	struct stat sf;
 	struct FileInfo fileInfo;	
@@ -270,9 +280,14 @@ void part4(char* mmap, char *fileName, char *fileLocation){
 	fileInfo.minute = timeinfo->tm_min;
 	fileInfo.second = timeinfo->tm_sec;
 	fileInfo.numBlocks = (fileInfo.fileSize + imageInfo.BlockSize - 1) / imageInfo.BlockSize;
-	fileInfo.startBlock = findFirstEmptyBlock(mmap);
+	fileInfo.Blocks = findEmptyBlocks(mmap,fileInfo.numBlocks);
+	if(fileInfo.Blocks == NULL){
+		return -1;
+	}
 
-	printf("%d\n%d\n%d\n",fileInfo.numBlocks, fileInfo.fileSize, fileInfo.startBlock);
+	//printf("%d\n%d\n%d\n",fileInfo.numBlocks, fileInfo.fileSize, fileInfo.startBlock);
+
+	return 1;
 
 }
 
