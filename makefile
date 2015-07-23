@@ -3,5 +3,6 @@ all:
 	gcc -Wall -DPART2 parts.c -o disklist
 	gcc -Wall -DPART3 parts.c -o diskget
 	gcc -Wall -DPART4 parts.c -o diskput
+	cp ../test.img test.img
 clean:
 	-rm diskinfo disklist diskget diskput

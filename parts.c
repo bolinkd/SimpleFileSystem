@@ -9,12 +9,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <time.h>
-
-#ifdef HAVE_ST_BIRTHTIME
-#define birthtime(x) x.st_birthtime
-#else
-#define birthtime(x) x.st_ctime
-#endif
+#include <arpa/inet.h>
 
 
 struct ImageInfo{
@@ -47,7 +42,8 @@ struct FileInfo{
 	uint8_t second;
 	int numBlocks;
 	int startBlock;
-	int* Blocks;
+	uint32_t *Blocks;
+	uint32_t *BlocksHex;
 };
 
 struct ImageInfo imageInfo;
@@ -217,24 +213,25 @@ void writeToFile(FILE *file, char *mmap, int currBlock, int copyLength){
 void copyFile(char* mmap, struct FileInfo fileInfo, char* localFileName){
 	FILE *file = fopen(localFileName, "wb");
 	int i;
+	int blockSize = imageInfo.BlockSize;
 	int currBlock = fileInfo.startBlock;
 	int bytesToCopy = fileInfo.fileSize;
 	for(i=0;i<fileInfo.numBlocks;i++){
 		int offset = imageInfo.FATStart*imageInfo.BlockSize + currBlock*4;
-		if(bytesToCopy < 512){
+		if(bytesToCopy < blockSize){
 			writeToFile(file, mmap, currBlock, bytesToCopy);
 			break;
 		}else{
-			writeToFile(file, mmap, currBlock, 512);
+			writeToFile(file, mmap, currBlock, blockSize);
 		}
-		bytesToCopy -= 512;
+		bytesToCopy -= blockSize;
 		currBlock = getImageInfo(mmap,offset,4);
 	}
 	fclose(file);
 }
 
-int* findEmptyBlocks(char *mmap, int numReturn){
-	int* rtnArray = malloc(sizeof(int)*numReturn);
+uint32_t *findEmptyBlocks(char *mmap, int numReturn){
+	uint32_t* rtnArray = malloc(sizeof(uint32_t)*numReturn);
 	int i;
 	int j=0;
 	int k=0;
@@ -242,10 +239,6 @@ int* findEmptyBlocks(char *mmap, int numReturn){
     int FATSize = imageInfo.BlockSize*imageInfo.FATBlocks;
     for(i=FATStartByte; i<FATStartByte+FATSize ;i=i+4){
     	if(k == numReturn){
-		    //for(i=0;i<numReturn;i++){
-		    //	printf("%d ",rtnArray[i]);
-		    //}
-		    //printf("\n");
 		    return rtnArray;   		
     	}
     	int FATEntry = getImageInfo(mmap,i,4);
@@ -258,13 +251,41 @@ int* findEmptyBlocks(char *mmap, int numReturn){
     return NULL;
 }
 
-int part4(char* mmap, char *fileName, char *fileLocation){
-	int fd;
+void reserveFATBlocks(char *mmap, int numBlocks, uint32_t *Blocks, uint32_t *BlocksHex){
+	int i;
+	for(i=0;i<numBlocks;i++){
+		int currBlock = Blocks[i];
+		int offset = imageInfo.FATStart*imageInfo.BlockSize + currBlock*4;
+		memcpy(mmap+offset, &BlocksHex[i+1], 4);
+	}
+}
+
+void writeBlocksToDisk(char *output_mmap, char *input_mmap, int numBlocks, uint32_t *Blocks, int bytesToCopy){
+	int i;
+	int bytesWritten=0;
+	for(i=0;i<numBlocks;i++){
+		int offset = Blocks[i]*imageInfo.BlockSize;
+		if(bytesToCopy < 512){
+			memcpy(output_mmap+offset, input_mmap+bytesWritten, bytesToCopy);
+			break;
+		}else{
+			memcpy(output_mmap+offset, input_mmap+bytesWritten, 512);
+			bytesWritten += 512;
+		}
+		bytesToCopy-=512;
+	}
+}
+
+
+int part4(char* output_mmap, char *fileName, char *fileLocation){
+	int fd,i;
+	char *input_mmap;
 	struct stat sf;
 	struct FileInfo fileInfo;	
-	if ((fd=open(fileName, O_RDONLY)))
+	if ((fd=open(fileName, O_RDWR)))
 	{
 		fstat(fd, &sf);
+		input_mmap = mmap(NULL,sf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
 	}
     time_t rawtime;
     struct tm *timeinfo;
@@ -280,12 +301,17 @@ int part4(char* mmap, char *fileName, char *fileLocation){
 	fileInfo.minute = timeinfo->tm_min;
 	fileInfo.second = timeinfo->tm_sec;
 	fileInfo.numBlocks = (fileInfo.fileSize + imageInfo.BlockSize - 1) / imageInfo.BlockSize;
-	fileInfo.Blocks = findEmptyBlocks(mmap,fileInfo.numBlocks);
-	if(fileInfo.Blocks == NULL){
-		return -1;
+	fileInfo.Blocks = findEmptyBlocks(output_mmap,fileInfo.numBlocks);
+	fileInfo.BlocksHex = malloc(sizeof(uint32_t *)*fileInfo.numBlocks+1);
+	for(i=0;i<fileInfo.numBlocks;i++){
+		fileInfo.BlocksHex[i] = htonl(fileInfo.Blocks[i]);
+		printf("%02x : %d\n",fileInfo.BlocksHex[i],fileInfo.Blocks[i]);
 	}
+	fileInfo.BlocksHex[fileInfo.numBlocks] = htonl(-1);
+	printf("%02x : %d\n",fileInfo.BlocksHex[fileInfo.numBlocks],fileInfo.Blocks[fileInfo.numBlocks]);
+	reserveFATBlocks(output_mmap, fileInfo.numBlocks, fileInfo.Blocks, fileInfo.BlocksHex);
+	writeBlocksToDisk(output_mmap, input_mmap, fileInfo.numBlocks, fileInfo.Blocks, fileInfo.fileSize);
 
-	//printf("%d\n%d\n%d\n",fileInfo.numBlocks, fileInfo.fileSize, fileInfo.startBlock);
 
 	return 1;
 
