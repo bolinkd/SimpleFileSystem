@@ -78,6 +78,10 @@ struct FileInfo fillFileInfo(char *directory_entry){
 		fileInfo.ForD = 'D';
 	}
 	fileInfo.fileName = memcpy(fileInfo.fileName, directory_entry + 27, 31);
+	//printf("FileName: %s\n",fileInfo.fileName);
+	//printf("FileStart: %d\n",fileInfo.startBlock);
+	//printf("FileSize: %d\n",fileInfo.numBlocks);
+	fflush(stdout);
 	return fileInfo;
 }
 
@@ -94,6 +98,19 @@ void setSuperImageInfo(char *p){
 	imageInfo.FATBlocks  = getImageInfo(p, 18, 4);
 	imageInfo.ROOTStart  = getImageInfo(p, 22, 4);
 	imageInfo.ROOTBlocks = getImageInfo(p, 26, 4);
+	int FATStartByte = (imageInfo.BlockSize*imageInfo.FATStart);
+    int FATSize = imageInfo.BlockSize*imageInfo.FATBlocks;
+    int i;
+    for(i=FATStartByte; i<FATStartByte+FATSize ;i=i+4){
+    	int FATEntry = getImageInfo(p,i,4);
+    	if(FATEntry == 0){
+    		imageInfo.Free++;
+    	}else if(FATEntry == 1){
+    		imageInfo.Reserved++;
+    	}else{
+    		imageInfo.Allocated++;
+    	}
+    }
 }
 
 int findNameLength(char *FileLocation){
@@ -104,16 +121,17 @@ int findNameLength(char *FileLocation){
 	return retVal++;
 }
 
+
 void printDirectory(char *mmap, struct DirInfo dirInfo){
 	int i,j;
-	printf("%d %d\n", dirInfo.DirSize, dirInfo.DirStart);
+	//printf("%d %d\n", dirInfo.DirSize, dirInfo.DirStart);
 	int DirectoriesPerBlock = imageInfo.BlockSize/64;
 	char *directory_entry = (char *)malloc(sizeof(char) * 64);
 	int offset = (dirInfo.DirStart)*imageInfo.BlockSize;
 	for(i=0;i<dirInfo.DirSize;i++){
 		for(j=0;j<DirectoriesPerBlock;j++){
 			directory_entry = memcpy(directory_entry, (mmap+offset)+(i*imageInfo.BlockSize)+(64*j), 64);
-			if((directory_entry[0] & 0x03) == 0x03 || (directory_entry[0] & 0x05) == 0x07){
+			if((directory_entry[0] & 0x03) == 0x03 || (directory_entry[0] & 0x07) == 0x05){
 				printFile(directory_entry);
 			}else{
 				// Is not a file or directory
@@ -130,26 +148,42 @@ struct DirInfo findDirectory(char* mmap, char* fileLocation, int BlockStart, int
 		fileLocation++;
 	}
 	int i,j;
+	int *Blocks = malloc(sizeof(int)*NumBlocks);
+	//printf("Blocks: ");
+	Blocks[0] = BlockStart;
+	for(i=0;i<NumBlocks;i++){
+		//printf("%d ",Blocks[i]);
+		j = imageInfo.FATStart*imageInfo.BlockSize+Blocks[i]*4;
+		Blocks[i+1] = getImageInfo(mmap,j,4);
+	}
+	//printf("\n");
 	int fileNameLength = findNameLength(fileLocation);
+	//printf("FN:  %s\n", fileLocation);
+	//printf("FNL: %d\n", fileNameLength);
+	fflush(stdout);
 
 	char *fileName = malloc(sizeof(char)*fileNameLength);
 	fileName = strncpy(fileName,fileLocation,fileNameLength);
 
 	int DirectoriesPerBlock = imageInfo.BlockSize/64;
 	char *directory_entry = (char *)malloc(sizeof(char) * 64);
-	int offset = BlockStart*imageInfo.BlockSize;
 	char *directoryName = (char *)malloc(sizeof(char) * 31);
 
 	for(i=0;i<NumBlocks;i++){
+		int offset = Blocks[i]*imageInfo.BlockSize;
 		for(j=0;j<DirectoriesPerBlock;j++){
 			directory_entry = memcpy(directory_entry, mmap+offset+i*imageInfo.BlockSize+64*j, 64);
 			if(fileNameLength == 0){
+				//printf("WOWOWOWOWO\n");
 				dirInfo.DirSize = NumBlocks;
 				dirInfo.DirStart = BlockStart;
+				return dirInfo;
 			}else{
 				//get new directory
-				if((directory_entry[0] & 0x05) == 0x07){
+				if((directory_entry[0] & 0x07) == 0x05){
 					directoryName = memcpy(directoryName, directory_entry + 27, 31);
+					//printf("Directory Name: %s\n", directoryName);
+					fflush(stdout);
 					if(strcmp(fileName, directoryName) == 0){
 						BlockStart = getImageInfo(directory_entry,1,4);
 						NumBlocks  = getImageInfo(directory_entry,5,4);
@@ -164,6 +198,7 @@ struct DirInfo findDirectory(char* mmap, char* fileLocation, int BlockStart, int
 	}
 	return dirInfo;
 }
+
 
 int findFileNameStart(char *fileLocation){
 	int length = strlen(fileLocation);
@@ -181,17 +216,21 @@ int findFileNameStart(char *fileLocation){
 struct FileInfo getFileInfo(char *mmap, struct DirInfo dirInfo, char *fileName){
 	int i,j;
 	struct FileInfo fileInfo;
-	fileInfo.fileName = "";
-	printf("%d %d\n", dirInfo.DirSize, dirInfo.DirStart);
+	//printf("%d %d\n", dirInfo.DirSize, dirInfo.DirStart);
 	int DirectoriesPerBlock = imageInfo.BlockSize/64;
 	char *directory_entry = (char *)malloc(sizeof(char) * 64);
 	int offset = (dirInfo.DirStart)*imageInfo.BlockSize;
 	for(i=0;i<dirInfo.DirSize;i++){
 		for(j=0;j<DirectoriesPerBlock;j++){
 			directory_entry = memcpy(directory_entry, (mmap+offset)+(i*imageInfo.BlockSize)+(64*j), 64);
+			//printf("ENTRY: %02x\n",directory_entry[0]);
 			if((directory_entry[0] & 0x03) == 0x03){
 				fileInfo = fillFileInfo(directory_entry);
+				//printf("%s == %s",fileName, fileInfo.fileName);
+				fflush(stdout);
 				if(strcmp(fileInfo.fileName,fileName) == 0){
+					//printf("REturN");
+					fflush(stdout);
 					return fileInfo;
 				}
 			}else{
@@ -212,20 +251,34 @@ void writeToFile(FILE *file, char *mmap, int currBlock, int copyLength){
 
 void copyFile(char* mmap, struct FileInfo fileInfo, char* localFileName){
 	FILE *file = fopen(localFileName, "wb");
+	//printf("FLE OPEN\n");
 	int i;
 	int blockSize = imageInfo.BlockSize;
 	int currBlock = fileInfo.startBlock;
 	int bytesToCopy = fileInfo.fileSize;
 	for(i=0;i<fileInfo.numBlocks;i++){
 		int offset = imageInfo.FATStart*imageInfo.BlockSize + currBlock*4;
+		//printf("offset %d\n",offset);
+		fflush(stdout);
 		if(bytesToCopy < blockSize){
+			//printf("FLE OPEN\n");
+			fflush(stdout);
 			writeToFile(file, mmap, currBlock, bytesToCopy);
 			break;
 		}else{
 			writeToFile(file, mmap, currBlock, blockSize);
 		}
 		bytesToCopy -= blockSize;
+		//printf("bytesToCopy: %d\n",bytesToCopy);
+		fflush(stdout);
+		//printf("Before: %d\n",currBlock);
+		fflush(stdout);
 		currBlock = getImageInfo(mmap,offset,4);
+		//printf("After: %d\n",currBlock);
+		if(currBlock == -1){
+			break;
+		}
+		fflush(stdout);
 	}
 	fclose(file);
 }
@@ -251,7 +304,7 @@ uint32_t *findEmptyBlocks(char *mmap, int numReturn){
     return NULL;
 }
 
-void reserveFATBlocks(char *mmap, int numBlocks, uint32_t *Blocks, uint32_t *BlocksHex){
+void reserveBlocks(char *mmap, int numBlocks, uint32_t *Blocks, uint32_t *BlocksHex){
 	int i;
 	for(i=0;i<numBlocks;i++){
 		int currBlock = Blocks[i];
@@ -276,6 +329,182 @@ void writeBlocksToDisk(char *output_mmap, char *input_mmap, int numBlocks, uint3
 	}
 }
 
+int findAvailibleFileLocation(char *mmap,int Block){
+	int offset = imageInfo.BlockSize * Block;
+	int i;
+	int j=0;
+	char *directory_entry = malloc(sizeof(char)*65);
+	for(i=0;i<imageInfo.BlockSize;i=i+64){
+		memcpy(directory_entry, mmap+offset+i, 64);
+		if(getImageInfo(directory_entry,58,6) == 65534){
+			return j;
+		}
+		j++;
+	}
+	return -1;
+
+}
+
+struct DirInfo createDirectory(char *mmap, struct FileInfo dirInfo, int Block){
+	struct DirInfo rtn;
+
+	uint32_t *block = (uint32_t *)findEmptyBlocks(mmap, 1);
+	uint32_t *blockHex = malloc(sizeof(uint32_t)*2);
+
+	blockHex[0] = htonl(block[0]);
+	blockHex[1] = htonl(0xFFFFFFFF);
+
+	reserveBlocks(mmap, 1, block, blockHex);
+
+	uint32_t numBlocks = htonl(1);
+	uint8_t used = 0x00;
+	uint8_t ForD = 0x5;
+	uint32_t fileSize = htonl(dirInfo.fileSize);
+	uint16_t year = htons(dirInfo.year);
+
+	int offset = Block*imageInfo.BlockSize + findAvailibleFileLocation(mmap, Block)*64; 
+	memcpy(mmap+offset, &ForD, 1);
+	memcpy(mmap+offset+1, &blockHex[0], 4);
+	memcpy(mmap+offset+5, &numBlocks, 4);
+	memcpy(mmap+offset+9, &fileSize, 4);
+	memcpy(mmap+offset+13, &year, 2);
+	memcpy(mmap+offset+15, &dirInfo.month, 1);
+	memcpy(mmap+offset+16, &dirInfo.day, 1);
+	memcpy(mmap+offset+17, &dirInfo.hour, 1);
+	memcpy(mmap+offset+18, &dirInfo.minute, 1);
+	memcpy(mmap+offset+19, &dirInfo.second, 1);
+	memcpy(mmap+offset+20, &year, 2);
+	memcpy(mmap+offset+22, &dirInfo.month, 1);
+	memcpy(mmap+offset+23, &dirInfo.day, 1);
+	memcpy(mmap+offset+24, &dirInfo.hour, 1);
+	memcpy(mmap+offset+25, &dirInfo.minute, 1);
+	memcpy(mmap+offset+26, &dirInfo.second, 1);
+	memcpy(mmap+offset+27, dirInfo.fileName, 31);
+	memcpy(mmap+offset+58, &used, 1);
+
+	rtn.DirStart = block[0];
+	rtn.DirSize = 1;
+
+	return rtn;
+}
+
+struct DirInfo findDirectorywCreation(char* mmap, char* fileLocation, int BlockStart, int NumBlocks){
+	time_t rawtime;
+    struct tm *timeinfo;
+    time (&rawtime);
+    timeinfo = localtime(&rawtime);
+	struct DirInfo dirInfo;
+	dirInfo.DirSize = 0;
+	dirInfo.DirStart = 0;
+	while(strncmp(fileLocation,"/",1) == 0){
+		fileLocation++;
+	}
+	int i,j;
+	int *Blocks = malloc(sizeof(int)*NumBlocks+1);
+	Blocks[0] = BlockStart;
+	for(i=0;i<NumBlocks;i++){
+		j = imageInfo.FATStart*imageInfo.BlockSize+Blocks[0]*4;
+		Blocks[i+1] = getImageInfo(mmap,j,4);
+	}
+
+	int fileNameLength = findNameLength(fileLocation);
+	//printf("FN:  %s %d\n", fileLocation, NumBlocks);
+	//printf("FNL: %d\n", fileNameLength);
+
+	char *fileName = malloc(sizeof(char)*fileNameLength);
+
+	fileName = strncpy(fileName,fileLocation,fileNameLength);
+	//printf("filename: %s",fileName);
+
+	int DirectoriesPerBlock = imageInfo.BlockSize/64;
+	char *directory_entry = (char *)malloc(sizeof(char) * 64);
+	char *directoryName = (char *)malloc(sizeof(char) * 31);
+
+	for(i=0;i<NumBlocks;i++){
+		int offset = Blocks[i]*imageInfo.BlockSize;
+		for(j=0;j<DirectoriesPerBlock;j++){
+			directory_entry = memcpy(directory_entry, mmap+offset+i*imageInfo.BlockSize+64*j, 64);
+			if(fileNameLength == 0){
+				dirInfo.DirSize = NumBlocks;
+				dirInfo.DirStart = BlockStart;
+			}else{
+				//get new directory
+				if((directory_entry[0] & 0x07) == 0x05){
+					directoryName = memcpy(directoryName, directory_entry + 27, 31);
+					if(strcmp(fileName, directoryName) == 0){
+						BlockStart = getImageInfo(directory_entry,1,4);
+						NumBlocks  = getImageInfo(directory_entry,5,4);
+						for(i=0;i<fileNameLength;i++){
+							fileLocation++;
+						}
+						dirInfo = findDirectorywCreation(mmap, fileLocation, BlockStart, NumBlocks);
+					}
+				}
+			}
+		}
+	}
+	if(dirInfo.DirSize == 0 && dirInfo.DirStart == 0){
+		//Create Directory
+		struct FileInfo f;
+		f.ForD = 'D';
+		f.fileSize = imageInfo.BlockSize;
+		f.fileName = fileName;
+		//printf("file Name: %s\n",f.fileName);
+		f.year = timeinfo->tm_year+1900;
+		f.month = timeinfo->tm_mon + 1;
+		f.day = timeinfo->tm_mday;
+		f.hour = timeinfo->tm_hour;
+		f.minute = timeinfo->tm_min;
+		f.second = timeinfo->tm_sec;
+		dirInfo = createDirectory(mmap, f, BlockStart);
+		//printf("NEW CREATE\n");
+		for(i=0;i<fileNameLength;i++){
+			fileLocation++;
+		}
+		//printf("%d %d\n", dirInfo.DirStart,dirInfo.DirSize);
+		dirInfo = findDirectorywCreation(mmap, fileLocation, dirInfo.DirStart, dirInfo.DirSize);
+
+
+	}
+	return dirInfo;
+}
+
+
+void addFileToDirectory(char *mmap, struct FileInfo fileInfo, struct DirInfo dirInfo){
+
+	uint32_t block = (uint32_t)dirInfo.DirStart;
+	uint32_t blockHex = htonl(fileInfo.startBlock); 
+
+
+	uint32_t numBlocks = htonl(fileInfo.numBlocks);
+	uint8_t used = 0x00;
+	uint8_t ForD = 0x3;
+	uint32_t fileSize = htonl(fileInfo.fileSize);
+	uint16_t year = htons(fileInfo.year);
+
+	int offset = block*imageInfo.BlockSize; 
+	memcpy(mmap+offset, &ForD, 1);
+	memcpy(mmap+offset+1, &blockHex, 4);
+	memcpy(mmap+offset+5, &numBlocks, 4);
+	memcpy(mmap+offset+9, &fileSize, 4);
+	memcpy(mmap+offset+13, &year, 2);
+	memcpy(mmap+offset+15, &fileInfo.month, 1);
+	memcpy(mmap+offset+16, &fileInfo.day, 1);
+	memcpy(mmap+offset+17, &fileInfo.hour, 1);
+	memcpy(mmap+offset+18, &fileInfo.minute, 1);
+	memcpy(mmap+offset+19, &fileInfo.second, 1);
+	memcpy(mmap+offset+20, &year, 2);
+	memcpy(mmap+offset+22, &fileInfo.month, 1);
+	memcpy(mmap+offset+23, &fileInfo.day, 1);
+	memcpy(mmap+offset+24, &fileInfo.hour, 1);
+	memcpy(mmap+offset+25, &fileInfo.minute, 1);
+	memcpy(mmap+offset+26, &fileInfo.second, 1);
+	memcpy(mmap+offset+27, fileInfo.fileName, 31);
+	memcpy(mmap+offset+58, &used, 1);
+
+	return;
+}
+
 
 int part4(char* output_mmap, char *fileName, char *fileLocation){
 	int fd,i;
@@ -287,13 +516,22 @@ int part4(char* output_mmap, char *fileName, char *fileLocation){
 		fstat(fd, &sf);
 		input_mmap = mmap(NULL,sf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
 	}
+	int fileNameLength = strlen(fileLocation);
+	int fileNameStart = findFileNameStart(fileLocation);
+	//printf("%d %d %d\n",fileNameLength, fileNameStart, fileNameLength-fileNameStart+1);
+
+	char *diskFileName = malloc(sizeof(char)*(fileNameLength-fileNameStart));
+	memcpy(diskFileName,fileLocation+fileNameStart,fileNameLength);
+	fileLocation[fileNameStart] = '\0';
+
     time_t rawtime;
     struct tm *timeinfo;
     time (&rawtime);
     timeinfo = localtime(&rawtime);
+
 	fileInfo.ForD = 'F';
 	fileInfo.fileSize = sf.st_size;
-	fileInfo.fileName = fileName;
+	fileInfo.fileName = diskFileName;
 	fileInfo.year = timeinfo->tm_year + 1900;
 	fileInfo.month = timeinfo->tm_mon + 1;
 	fileInfo.day = timeinfo->tm_mday;
@@ -301,16 +539,25 @@ int part4(char* output_mmap, char *fileName, char *fileLocation){
 	fileInfo.minute = timeinfo->tm_min;
 	fileInfo.second = timeinfo->tm_sec;
 	fileInfo.numBlocks = (fileInfo.fileSize + imageInfo.BlockSize - 1) / imageInfo.BlockSize;
+
+	if(fileInfo.numBlocks > imageInfo.Free){
+		printf("Not Enough Space On Disk\n");
+		return -1;
+	}
+	struct DirInfo dirInfo;
+	//printf("%d %d\n", dirInfo.DirSize, dirInfo.DirStart);
+	dirInfo = findDirectorywCreation(output_mmap, fileLocation, imageInfo.ROOTStart, imageInfo.ROOTBlocks);
 	fileInfo.Blocks = findEmptyBlocks(output_mmap,fileInfo.numBlocks);
 	fileInfo.BlocksHex = malloc(sizeof(uint32_t *)*fileInfo.numBlocks+1);
 	for(i=0;i<fileInfo.numBlocks;i++){
 		fileInfo.BlocksHex[i] = htonl(fileInfo.Blocks[i]);
-		printf("%02x : %d\n",fileInfo.BlocksHex[i],fileInfo.Blocks[i]);
 	}
-	fileInfo.BlocksHex[fileInfo.numBlocks] = htonl(-1);
-	printf("%02x : %d\n",fileInfo.BlocksHex[fileInfo.numBlocks],fileInfo.Blocks[fileInfo.numBlocks]);
-	reserveFATBlocks(output_mmap, fileInfo.numBlocks, fileInfo.Blocks, fileInfo.BlocksHex);
+	fileInfo.startBlock = fileInfo.Blocks[0];
+	//printf("THSSAFSGSGWG WE: %d", fileInfo.startBlock);
+	fileInfo.BlocksHex[fileInfo.numBlocks] = 0xFFFFFFFF;
+	reserveBlocks(output_mmap, fileInfo.numBlocks, fileInfo.Blocks, fileInfo.BlocksHex);
 	writeBlocksToDisk(output_mmap, input_mmap, fileInfo.numBlocks, fileInfo.Blocks, fileInfo.fileSize);
+	addFileToDirectory(output_mmap, fileInfo, dirInfo);
 
 
 	return 1;
@@ -321,17 +568,24 @@ int part3(char* mmap, char* fileLocation, char* localFileName){
 	int fileNameStart = findFileNameStart(fileLocation);
 	char *fileName = malloc(sizeof(char) * 31);
 	strcpy(fileName,fileLocation+fileNameStart);
+	//printf("fileName: %s\n",fileName);
 	fileLocation[fileNameStart] = '\0';
+	//printf("fileLocation: %s\n",fileLocation);
 	struct DirInfo dirInfo = findDirectory(mmap, fileLocation, imageInfo.ROOTStart, imageInfo.ROOTBlocks);
 	if(dirInfo.DirSize == 0 && dirInfo.DirStart == 0){
 		printf("Error Code: -1\n");
 		return -1;
 	}else{
-		printf("Success Code: ");
+		//printf("Success Code: ");
+		fflush(stdout);
 		struct FileInfo fileInfo = getFileInfo(mmap, dirInfo, fileName);
+		//printf("%d %d", dirInfo.DirStart, dirInfo.DirSize);
+		fflush(stdout);
 		if(strcmp(fileInfo.fileName, "") == 0){
 			return -1;
 		}else{
+			//printf("CopyFile\n");
+			fflush(stdout);
 			copyFile(mmap, fileInfo, localFileName);
 		}
 		return -1;
@@ -347,7 +601,6 @@ void part2(char* mmap, char* fileLocation){
 		printf("Error Code: -1\n");
 		return;
 	}else{
-		printf("Success Code: ");
 		printDirectory(mmap, dirInfo);
 		return;
 	}
@@ -356,7 +609,6 @@ void part2(char* mmap, char* fileLocation){
 }
 
 void part1(char* mmap){
-	int i;
 	printf("Super block information:\n");
 	printf("Block size: %d\n", imageInfo.BlockSize);
 	printf("Block count: %d\n", imageInfo.BlockCount);
@@ -364,18 +616,7 @@ void part1(char* mmap){
     printf("FAT blocks: %d\n", imageInfo.FATBlocks);
     printf("Root directory start: %d\n", imageInfo.ROOTStart);
     printf("Root directory blocks: %d\n\n", imageInfo.ROOTBlocks);
-    int FATStartByte = (imageInfo.BlockSize*imageInfo.FATStart);
-    int FATSize = imageInfo.BlockSize*imageInfo.FATBlocks;
-    for(i=FATStartByte; i<FATStartByte+FATSize ;i=i+4){
-    	int FATEntry = getImageInfo(mmap,i,4);
-    	if(FATEntry == 0){
-    		imageInfo.Free++;
-    	}else if(FATEntry == 1){
-    		imageInfo.Reserved++;
-    	}else{
-    		imageInfo.Allocated++;
-    	}
-    }
+
     printf("FAT information: \n");
     printf("Free Blocks: %d\n", imageInfo.Free);
     printf("Reserved Blocks: %d\n", imageInfo.Reserved);
@@ -405,10 +646,8 @@ int main(int argc, char* argv[]){
 	#elif defined(PART2)
 		part2(p, argv[2]);
 	#elif defined(PART3)
-		printf ("Part 3: diskget\n");
 		part3(p, argv[2],argv[3]);
 	#elif defined(PART4)
-		printf ("Part 4: diskput\n");
 		part4(p, argv[2],argv[3]);
 	#else
 	# 	error "PART[1234] must be defined"
