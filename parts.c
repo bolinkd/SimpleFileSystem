@@ -283,23 +283,29 @@ void copyFile(char* mmap, struct FileInfo fileInfo, char* localFileName){
 	fclose(file);
 }
 
+unsigned int randr(unsigned int min, unsigned int max){
+       double scaled = (double)rand()/RAND_MAX;
+
+       return (max - min +1)*scaled + min;
+}
+
 uint32_t *findEmptyBlocks(char *mmap, int numReturn){
 	uint32_t* rtnArray = malloc(sizeof(uint32_t)*numReturn);
 	int i;
-	int j=0;
+	//int j=0;
 	int k=0;
     int FATStartByte = (imageInfo.BlockSize*imageInfo.FATStart);
-    int FATSize = imageInfo.BlockSize*imageInfo.FATBlocks;
-    for(i=FATStartByte; i<FATStartByte+FATSize ;i=i+4){
+    //int FATSize = imageInfo.BlockSize*imageInfo.FATBlocks;
+    for(;;){
+    	i=randr(1,imageInfo.BlockCount-1);
     	if(k == numReturn){
 		    return rtnArray;   		
     	}
-    	int FATEntry = getImageInfo(mmap,i,4);
+    	int FATEntry = getImageInfo(mmap,FATStartByte + i*4,4);
     	if(FATEntry == 0){
-    		rtnArray[k] = j;
+    		rtnArray[k] = i;
     		k++;
     	}
-    	j++;
     }
     return NULL;
 }
@@ -336,7 +342,8 @@ int findAvailibleFileLocation(char *mmap,int Block){
 	char *directory_entry = malloc(sizeof(char)*65);
 	for(i=0;i<imageInfo.BlockSize;i=i+64){
 		memcpy(directory_entry, mmap+offset+i, 64);
-		if(getImageInfo(directory_entry,58,6) == 65534){
+		//printf("USED: %d\n",getImageInfo(directory_entry,58,4));
+		if(getImageInfo(directory_entry,58,4) == -1){
 			return j;
 		}
 		j++;
@@ -347,6 +354,7 @@ int findAvailibleFileLocation(char *mmap,int Block){
 
 struct DirInfo createDirectory(char *mmap, struct FileInfo dirInfo, int Block){
 	struct DirInfo rtn;
+	int i;
 
 	uint32_t *block = (uint32_t *)findEmptyBlocks(mmap, 1);
 	uint32_t *blockHex = malloc(sizeof(uint32_t)*2);
@@ -358,9 +366,20 @@ struct DirInfo createDirectory(char *mmap, struct FileInfo dirInfo, int Block){
 
 	uint32_t numBlocks = htonl(1);
 	uint8_t used = 0x00;
+	uint32_t unused = 0xFF;
 	uint8_t ForD = 0x5;
 	uint32_t fileSize = htonl(dirInfo.fileSize);
 	uint16_t year = htons(dirInfo.year);
+
+	for(i=0;i<imageInfo.BlockSize/64;i++){
+		int offset = block[0]*imageInfo.BlockSize+i*64;
+		memcpy(mmap+offset+58,&unused ,1);
+		memcpy(mmap+offset+59,&unused ,1);
+		memcpy(mmap+offset+60,&unused ,1);
+		memcpy(mmap+offset+61,&unused ,1);
+		memcpy(mmap+offset+62,&unused ,1);
+		memcpy(mmap+offset+63,&unused ,1);
+	}
 
 	int offset = Block*imageInfo.BlockSize + findAvailibleFileLocation(mmap, Block)*64; 
 	memcpy(mmap+offset, &ForD, 1);
@@ -408,6 +427,10 @@ struct DirInfo findDirectorywCreation(char* mmap, char* fileLocation, int BlockS
 	}
 
 	int fileNameLength = findNameLength(fileLocation);
+	if(fileNameLength == 0){
+		dirInfo.DirSize = NumBlocks;
+		dirInfo.DirStart = BlockStart;
+	}
 	//printf("FN:  %s %d\n", fileLocation, NumBlocks);
 	//printf("FNL: %d\n", fileNameLength);
 
@@ -424,21 +447,15 @@ struct DirInfo findDirectorywCreation(char* mmap, char* fileLocation, int BlockS
 		int offset = Blocks[i]*imageInfo.BlockSize;
 		for(j=0;j<DirectoriesPerBlock;j++){
 			directory_entry = memcpy(directory_entry, mmap+offset+i*imageInfo.BlockSize+64*j, 64);
-			if(fileNameLength == 0){
-				dirInfo.DirSize = NumBlocks;
-				dirInfo.DirStart = BlockStart;
-			}else{
-				//get new directory
-				if((directory_entry[0] & 0x07) == 0x05){
-					directoryName = memcpy(directoryName, directory_entry + 27, 31);
-					if(strcmp(fileName, directoryName) == 0){
-						BlockStart = getImageInfo(directory_entry,1,4);
-						NumBlocks  = getImageInfo(directory_entry,5,4);
-						for(i=0;i<fileNameLength;i++){
-							fileLocation++;
-						}
-						dirInfo = findDirectorywCreation(mmap, fileLocation, BlockStart, NumBlocks);
+			if((directory_entry[0] & 0x07) == 0x05){
+				directoryName = memcpy(directoryName, directory_entry + 27, 31);
+				if(strcmp(fileName, directoryName) == 0){
+					int BlockStarts = getImageInfo(directory_entry,1,4);
+					NumBlocks  = getImageInfo(directory_entry,5,4);
+					for(i=0;i<fileNameLength;i++){
+						fileLocation++;
 					}
+					dirInfo = findDirectorywCreation(mmap, fileLocation, BlockStarts, NumBlocks);
 				}
 			}
 		}
@@ -482,7 +499,7 @@ void addFileToDirectory(char *mmap, struct FileInfo fileInfo, struct DirInfo dir
 	uint32_t fileSize = htonl(fileInfo.fileSize);
 	uint16_t year = htons(fileInfo.year);
 
-	int offset = block*imageInfo.BlockSize; 
+	int offset = block*imageInfo.BlockSize + findAvailibleFileLocation(mmap, block)*64; 
 	memcpy(mmap+offset, &ForD, 1);
 	memcpy(mmap+offset+1, &blockHex, 4);
 	memcpy(mmap+offset+5, &numBlocks, 4);
@@ -559,7 +576,6 @@ int part4(char* output_mmap, char *fileName, char *fileLocation){
 	writeBlocksToDisk(output_mmap, input_mmap, fileInfo.numBlocks, fileInfo.Blocks, fileInfo.fileSize);
 	addFileToDirectory(output_mmap, fileInfo, dirInfo);
 
-
 	return 1;
 
 }
@@ -629,28 +645,66 @@ int main(int argc, char* argv[]){
 	int fd;
 	struct stat sf;
 	char *p;
-	
-	if ((fd=open(argv[1], O_RDWR)))
-	{
-		fstat(fd, &sf);
-		p = mmap(NULL,sf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-		setSuperImageInfo(p);
-	}
-	else
-		printf("Fail to open the image file.\n");
-
-	close(fd);
 
 	#if defined(PART1)
+		if(argc == 1){
+			printf("Usage: ./diskinfo <Image Name>\n");
+			exit(-1);
+		}
+		if ((fd=open(argv[1], O_RDWR))){
+			fstat(fd, &sf);
+			p = mmap(NULL,sf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+			setSuperImageInfo(p);
+		}else{
+			printf("Fail to open the image file.\n");
+			exit(-1);
+		}
 		part1(p);
 	#elif defined(PART2)
+		if(argc == 1){
+			printf("Usage: ./disklist <Image Name> </path/to/dir>\n");
+			exit(-1);
+		}
+		if ((fd=open(argv[1], O_RDWR))){
+			fstat(fd, &sf);
+			p = mmap(NULL,sf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+			setSuperImageInfo(p);
+		}else{
+			printf("Fail to open the image file.\n");
+			exit(-1);
+		}
 		part2(p, argv[2]);
 	#elif defined(PART3)
+		if(argc == 1){
+			printf("Usage: ./diskget <Image Name> </path/on/disk.ext> <localFileName>\n");
+			exit(-1);
+		}
+		if ((fd=open(argv[1], O_RDWR))){
+			fstat(fd, &sf);
+			p = mmap(NULL,sf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+			setSuperImageInfo(p);
+		}else{
+			printf("Fail to open the image file.\n");
+		}
 		part3(p, argv[2],argv[3]);
 	#elif defined(PART4)
+		if(argc == 1){
+			printf("Usage: ./diskput <Image Name> <localFileName> </path/on/disk.ext>\n");
+			exit(-1);
+		}
+		if ((fd=open(argv[1], O_RDWR))){
+			fstat(fd, &sf);
+			p = mmap(NULL,sf.st_size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
+			setSuperImageInfo(p);
+		}else{
+			printf("Fail to open the image file.\n");
+			exit(-1);
+		}
 		part4(p, argv[2],argv[3]);
 	#else
 	# 	error "PART[1234] must be defined"
 	#endif
+
+	close(fd);
 	return 0;
 } 
